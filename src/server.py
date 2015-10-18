@@ -62,7 +62,7 @@ def _safe_remove(path):
 
 
 def _REST_callback(callback, jobid, result):
-    post_data = {"response": result,
+    post_data = {"result": result,
                  "jobid": jobid}
     print "[SERVER] REST Callback %s (jobid=%s):" % (callback, jobid)
     try:
@@ -77,11 +77,11 @@ def _REST_callback(callback, jobid, result):
         print e
 
 
-def _run_flowerrecognition(toexecute_job, flowerrecognition):
+def _run_flowerrecognition(toexecute_job, flowerrecognition, executed_jobs):
     input_fn = toexecute_job["mediapath"]
     result = flowerrecognition.run(input_fn)
     print result
-    _REST_callback(toexecute_job["callback"], toexecute_job["jobid"], result)
+    _REST_callback("http://" + config.BACKEND_IP + ":" + str(config.BACKEND_PORT) + "/setasfinished", toexecute_job["jobid"], result)
     _safe_remove(input_fn)
 
 
@@ -94,7 +94,7 @@ def _caffe_worker(toexecute_jobs, executed_jobs):
     while True:
         toexecute_job = toexecute_jobs.get()
         if toexecute_job["restpoint"] == "flowerrecognition":
-            _run_flowerrecognition(toexecute_job, flowerrecognition)
+            _run_flowerrecognition(toexecute_job, flowerrecognition, executed_jobs)
 
 
 ###################     ServerREST       ################
@@ -106,6 +106,7 @@ class ServerREST(object):
         self.port = port
         self.toexecute_jobs = multiprocessing.Queue()
         self.executed_jobs = multiprocessing.Queue()
+        self.finished_jobs = {}
         self._caffe_worker_process = multiprocessing.Process(target=_caffe_worker,
                                              args=(self.toexecute_jobs,
                                                    self.executed_jobs))
@@ -143,21 +144,30 @@ class ServerREST(object):
 
 
     @cherrypy.expose
-    def flowerrecognition(self, callback, jobid, mediafile, modelname):
+    def flowerrecognition(self, jobid, mediafile):
         mediapath = _prepare_local_file_from_stream(mediafile)
         if not _valid_image(mediapath):
             _safe_remove(mediapath)
             return "Mediafile not an image"
 
-        toexecute_job = {"callback": callback,
-               "jobid": jobid,
+        toexecute_job = {"jobid": jobid,
                "restpoint": "flowerrecognition",
-               "mediapath": mediapath,
-               "modelname": modelname}
+               "mediapath": mediapath}
 
         self.toexecute_jobs.put(toexecute_job)
 
+    @cherrypy.expose
+    def setasfinished(self, jobid, result):
+        self.finished_jobs[jobid] = result
 
+    @cherrypy.expose
+    def checkfinished(self, jobid):
+        if jobid in self.finished_jobs:
+            toreturn = self.finished_jobs[jobid]
+            del self.finished_jobs[jobid]
+        else:
+            toreturn = "0"
+        return toreturn
 
 
 ###################     Main       ################
